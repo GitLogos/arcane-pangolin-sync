@@ -1,0 +1,35 @@
+services:
+  arcane-pangolin-sync:
+    build: .
+    restart: unless-stopped
+    environment:
+      ARCANE_URL: http://arcane:3552
+      ARCANE_API_KEY: ${ARCANE_API_KEY}
+
+      # Pangolin integration API URL. Use your self-hosted API base, with or without /v1.
+      PANGOLIN_URL: https://api.example.com/v1
+      PANGOLIN_API_KEY: ${PANGOLIN_API_KEY}
+      PANGOLIN_ORG_ID: ${PANGOLIN_ORG_ID}
+      PANGOLIN_DOMAIN_ID: ${PANGOLIN_DOMAIN_ID}
+
+      # Recommended: use an existing online Pangolin site that can reach your Docker nodes.
+      PANGOLIN_SITE_ID: ${PANGOLIN_SITE_ID}
+      # Alternative: create/delete one site per Arcane stack. This still requires you to run/approve Newt/WireGuard as appropriate.
+      PANGOLIN_CREATE_SITES: "false"
+
+      # Applies this shared policy to every existing and newly managed public resource.
+      PANGOLIN_RESOURCE_POLICY_ID: ${PANGOLIN_RESOURCE_POLICY_ID}
+
+      # Target IP for Docker published ports bound to 0.0.0.0 and for host-network ports.
+      DEFAULT_TARGET_IP: 192.168.1.10
+      # Optional per Arcane environment override: env-id=reachable-node-ip,0=local-node-ip,*=fallback
+      ARCANE_ENV_TARGET_IPS: "0=192.168.1.10"
+
+      DRY_RUN: "true"
+      STATE_FILE: /data/state.json
+    volumes:
+      - arcane-pangolin-sync-data:/data
+
+volumes:
+  arcane-pangolin-sync-data:
+
