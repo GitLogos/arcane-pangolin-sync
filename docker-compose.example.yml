@@ -1,6 +1,6 @@
 services:
   arcane-pangolin-sync:
-    build: .
+    image: ghcr.io/gitlogos/arcane-pangolin-sync:latest
     restart: unless-stopped
     environment:
       ARCANE_URL: http://arcane:3552

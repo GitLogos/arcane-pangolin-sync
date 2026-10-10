@@ -100,7 +100,7 @@ When using Pangolin local resources, keep `PANGOLIN_CREATE_SITES=false` and set 
 ## Run
 
 ```bash
-docker compose -f docker-compose.example.yml up -d --build
+docker compose -f docker-compose.example.yml up -d
 ```
 
 Start with:
@@ -117,4 +117,4 @@ DRY_RUN=false
 
 ## GitHub Actions image
 
-The workflow in `.github/workflows/docker-image.yml` builds and pushes an image to GHCR on every push to `main`.
+The workflow in `.github/workflows/docker-image.yml` builds and pushes `ghcr.io/gitlogos/arcane-pangolin-sync:latest` to GHCR on every push to `main`.
