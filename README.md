@@ -16,10 +16,11 @@ On `project_deploy` and `project_redeploy` success:
 2. If any Compose service has `pangolin.ignore=true`, skip the whole stack and leave any matching Pangolin resource unmanaged.
 3. If any Compose service has `pangolin.enable=true`, use only those services.
 4. Otherwise, find services with exactly one usable exposed/published port.
-5. Create one Pangolin public HTTP resource at `{stack-name}.{domain}`.
-6. If one target is found, route `/` to that `ip:port`.
-7. If multiple targets are found, create path targets like `/service-name`.
-8. Apply `PANGOLIN_RESOURCE_POLICY_ID` when configured.
+5. When `ADOPT_EXISTING=true`, first scan existing Pangolin public resources and adopt one whose enabled target `ip:port` set exactly matches the desired targets.
+6. Otherwise, create one Pangolin public HTTP resource at `{stack-name}.{domain}`.
+7. If one target is found, route `/` to that `ip:port`.
+8. If multiple targets are found, create path targets like `/service-name`.
+9. Apply `PANGOLIN_RESOURCE_POLICY_ID` when configured.
 
 On `project_destroy` success:
 
@@ -32,7 +33,9 @@ On `project_down` success:
 
 ## Important networking notes
 
-For published bridge ports and host-network services, set `DEFAULT_TARGET_IP` or `ARCANE_ENV_TARGET_IPS` to the Docker node IP reachable from the Pangolin site.
+For published bridge ports and host-network services, the target IP must be the Docker node IP reachable from the Pangolin site/local site. Explicit `ARCANE_ENV_TARGET_IPS` entries win, then `*`, then `DEFAULT_TARGET_IP`. If none are set, the syncer tries to infer the IP from Arcane's configured environment `apiUrl` host.
+
+For self-hosted Pangolin, `PANGOLIN_URL` should point at the Integration API server, not necessarily the dashboard URL. The default self-hosted integration port is usually `3003`; the syncer accepts the URL with or without `/v1`, for example `http://pangolin:3003` or `http://pangolin:3003/v1`.
 
 Macvlan containers usually need the container's own LAN IP. Arcane's current runtime payload may not expose that IP. For those services, set explicit labels:
 
@@ -75,19 +78,22 @@ Required:
 | `PANGOLIN_API_KEY` | Pangolin integration API key |
 | `PANGOLIN_ORG_ID` | Pangolin organization ID |
 | `PANGOLIN_DOMAIN_ID` | Domain ID used for public resources |
-| `PANGOLIN_SITE_ID` or `PANGOLIN_CREATE_SITES=true` | Existing site to attach targets to, or create per-stack sites |
-| `DEFAULT_TARGET_IP` or `ARCANE_ENV_TARGET_IPS` | Reachable Docker node IP(s) |
+| `PANGOLIN_SITE_ID` or `PANGOLIN_CREATE_SITES=true` | Existing site/local site to attach targets to, or create per-stack sites |
 
 Optional:
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PANGOLIN_RESOURCE_POLICY_ID` | unset | Shared policy to apply to all existing and new public resources |
+| `ADOPT_EXISTING` | `false` | Adopt an existing Pangolin public resource when its enabled targets exactly match the desired `ip:port` set |
 | `DRY_RUN` | `true` | Log actions without changing Pangolin |
 | `STATE_FILE` | `/data/state.json` | Local state file used for safe deletes |
 | `STARTUP_CATCHUP` | `true` | Query recent successful activities on startup |
 | `APPLY_POLICY_ON_RUN` | `true` | Apply `PANGOLIN_RESOURCE_POLICY_ID` to existing public resources on startup |
+| `DEFAULT_TARGET_IP` | unset | Fallback Docker node IP reachable from Pangolin |
 | `ARCANE_ENV_TARGET_IPS` | unset | Comma-separated map like `0=192.168.1.10,env2=192.168.1.11,*=192.168.1.10` |
+
+When using Pangolin local resources, keep `PANGOLIN_CREATE_SITES=false` and set `PANGOLIN_SITE_ID` to the existing local site ID. Automatic site creation currently creates Newt-style sites and is not recommended for local-resource setups.
 
 `pangolin.ignore=true` is intended for stacks you want to manage manually in Pangolin, for example to avoid the shared policy. On deploy/redeploy, the syncer removes that stack from its managed state without deleting the Pangolin resource. During startup policy application, it skips resources whose recorded ID, name, or subdomain match an ignored stack.
 

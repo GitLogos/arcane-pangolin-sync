@@ -49,6 +49,12 @@ type ArcaneProjectDetails struct {
 	Services        []ComposeService   `json:"services"`
 }
 
+type ArcaneEnvironment struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	APIURL string `json:"apiUrl"`
+}
+
 type ArcaneRuntimeSvc struct {
 	Name          string   `json:"name"`
 	Image         string   `json:"image"`
@@ -93,9 +99,10 @@ type DesiredTarget struct {
 }
 
 type ManagedResource struct {
-	SiteID     int   `json:"siteId,omitempty"`
-	ResourceID int   `json:"resourceId,omitempty"`
-	TargetIDs  []int `json:"targetIds,omitempty"`
+	SiteID      int   `json:"siteId,omitempty"`
+	SiteManaged bool  `json:"siteManaged,omitempty"`
+	ResourceID  int   `json:"resourceId,omitempty"`
+	TargetIDs   []int `json:"targetIds,omitempty"`
 }
 
 type State struct {
@@ -122,5 +129,10 @@ type PangolinResource struct {
 }
 
 type PangolinTarget struct {
-	TargetID int `json:"targetId"`
+	TargetID int    `json:"targetId"`
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	SiteID   int    `json:"siteId"`
+	Enabled  bool   `json:"enabled"`
+	Path     string `json:"path"`
 }

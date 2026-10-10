@@ -19,6 +19,7 @@ type Config struct {
 	PangolinDefaultSiteID    int
 	PangolinCreateSites      bool
 	PangolinResourcePolicyID int
+	AdoptExisting            bool
 
 	DefaultTargetIP string
 	EnvTargetIPs    map[string]string
@@ -41,6 +42,7 @@ func LoadConfig() (Config, error) {
 		PangolinDefaultSiteID:    envInt("PANGOLIN_SITE_ID", 0),
 		PangolinCreateSites:      envBool("PANGOLIN_CREATE_SITES", false),
 		PangolinResourcePolicyID: envInt("PANGOLIN_RESOURCE_POLICY_ID", 0),
+		AdoptExisting:            envBool("ADOPT_EXISTING", false),
 		DefaultTargetIP:          os.Getenv("DEFAULT_TARGET_IP"),
 		EnvTargetIPs:             envMap("ARCANE_ENV_TARGET_IPS"),
 		DryRun:                   envBool("DRY_RUN", true),
@@ -68,9 +70,6 @@ func LoadConfig() (Config, error) {
 	}
 	if cfg.PangolinDefaultSiteID == 0 && !cfg.PangolinCreateSites {
 		return Config{}, errors.New("set PANGOLIN_SITE_ID or set PANGOLIN_CREATE_SITES=true")
-	}
-	if cfg.DefaultTargetIP == "" && len(cfg.EnvTargetIPs) == 0 {
-		return Config{}, errors.New("set DEFAULT_TARGET_IP or ARCANE_ENV_TARGET_IPS so bridge/host published ports resolve to a reachable node IP")
 	}
 	return cfg, nil
 }

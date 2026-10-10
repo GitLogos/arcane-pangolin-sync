@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -222,7 +224,8 @@ func (s *Syncer) reconcileProject(ctx context.Context, envID, projectID string) 
 	}
 	compose.RuntimeServices = runtime.RuntimeServices
 
-	desired, err := desiredFromProject(s.cfg, envID, compose)
+	envCfg := s.configForEnv(ctx, envID)
+	desired, err := desiredFromProject(envCfg, envID, compose)
 	if err != nil {
 		var ignored *IgnoredProjectError
 		if errors.As(err, &ignored) {
@@ -266,6 +269,49 @@ func (s *Syncer) ignoreProject(envID, projectID string, ignored *IgnoredProjectE
 	return s.save()
 }
 
+func (s *Syncer) configForEnv(ctx context.Context, envID string) Config {
+	if targetIPForEnv(s.cfg, envID) != "" {
+		return s.cfg
+	}
+	ip, err := s.inferTargetIPFromArcaneEnvironment(ctx, envID)
+	if err != nil {
+		s.log.Warn("could not infer target IP from Arcane environment", "environmentId", envID, "error", err)
+		return s.cfg
+	}
+	if ip == "" {
+		return s.cfg
+	}
+	cfg := s.cfg
+	cfg.EnvTargetIPs = map[string]string{}
+	for key, value := range s.cfg.EnvTargetIPs {
+		cfg.EnvTargetIPs[key] = value
+	}
+	cfg.EnvTargetIPs[envID] = ip
+	s.log.Info("inferred target IP from Arcane environment", "environmentId", envID, "ip", ip)
+	return cfg
+}
+
+func (s *Syncer) inferTargetIPFromArcaneEnvironment(ctx context.Context, envID string) (string, error) {
+	env, err := s.getArcaneEnvironment(ctx, envID)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(env.APIURL)
+	if err != nil {
+		return "", err
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return "", nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		s.log.Warn("Arcane environment API URL host is not an IP; set DEFAULT_TARGET_IP or ARCANE_ENV_TARGET_IPS", "environmentId", envID, "apiUrl", env.APIURL, "host", host)
+		return "", nil
+	}
+	return ip.String(), nil
+}
+
 func (s *Syncer) shouldSkipPolicy(resource PangolinResource) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -298,6 +344,15 @@ func (s *Syncer) deleteProject(ctx context.Context, envID, projectID string) err
 	s.mu.Unlock()
 	s.log.Info("deleted managed Pangolin resource", "key", key)
 	return s.save()
+}
+
+func (s *Syncer) getArcaneEnvironment(ctx context.Context, envID string) (ArcaneEnvironment, error) {
+	var out APIResponse[ArcaneEnvironment]
+	path := "/api/environments/" + escape(envID)
+	if err := s.arcane.get(ctx, path, &out); err != nil {
+		return ArcaneEnvironment{}, err
+	}
+	return out.Data, nil
 }
 
 func (s *Syncer) getProjectCompose(ctx context.Context, envID, projectID string) (ArcaneProjectDetails, error) {

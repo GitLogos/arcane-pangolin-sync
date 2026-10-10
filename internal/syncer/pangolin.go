@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 )
 
 type Pangolin struct {
@@ -19,26 +20,43 @@ func newPangolin(cfg Config, log *slog.Logger) *Pangolin {
 
 func (p *Pangolin) ensureResource(ctx context.Context, desired DesiredResource, state ManagedResource, dryRun bool) (ManagedResource, error) {
 	siteID := state.SiteID
+	siteManaged := state.SiteManaged
 	if siteID == 0 {
 		siteID = p.cfg.PangolinDefaultSiteID
+	}
+	resourceID := state.ResourceID
+	if resourceID == 0 && p.cfg.AdoptExisting {
+		adopted, ok, err := p.adoptExistingResource(ctx, desired)
+		if err != nil {
+			return state, err
+		}
+		if ok {
+			state = adopted
+			resourceID = adopted.ResourceID
+			if state.SiteID > 0 {
+				siteID = state.SiteID
+				siteManaged = state.SiteManaged
+			}
+		}
 	}
 	if siteID == 0 && p.cfg.PangolinCreateSites {
 		if dryRun {
 			p.log.Info("dry run: would create Pangolin site", "name", desired.DisplayName)
 			siteID = -1
+			siteManaged = true
 		} else {
 			site, err := p.createSite(ctx, desired.DisplayName, desired.Stack)
 			if err != nil {
 				return state, err
 			}
 			siteID = site.SiteID
+			siteManaged = true
 		}
 	}
 	if siteID == 0 {
 		return state, fmt.Errorf("no Pangolin site available for %s", desired.Key)
 	}
 
-	resourceID := state.ResourceID
 	if resourceID == 0 {
 		if dryRun {
 			p.log.Info("dry run: would create Pangolin public resource",
@@ -65,7 +83,7 @@ func (p *Pangolin) ensureResource(ctx context.Context, desired DesiredResource, 
 			p.log.Info("dry run: would create Pangolin target",
 				"resourceId", resourceID, "siteId", siteID, "ip", target.IP, "port", target.Port, "path", target.Path)
 		}
-		return ManagedResource{SiteID: siteID, ResourceID: resourceID}, nil
+		return ManagedResource{SiteID: siteID, SiteManaged: siteManaged, ResourceID: resourceID}, nil
 	}
 
 	for _, targetID := range state.TargetIDs {
@@ -82,7 +100,7 @@ func (p *Pangolin) ensureResource(ctx context.Context, desired DesiredResource, 
 		}
 		targetIDs = append(targetIDs, created.TargetID)
 	}
-	return ManagedResource{SiteID: siteID, ResourceID: resourceID, TargetIDs: targetIDs}, nil
+	return ManagedResource{SiteID: siteID, SiteManaged: siteManaged, ResourceID: resourceID, TargetIDs: targetIDs}, nil
 }
 
 func (p *Pangolin) deleteManaged(ctx context.Context, managed ManagedResource, dryRun bool) error {
@@ -93,7 +111,7 @@ func (p *Pangolin) deleteManaged(ctx context.Context, managed ManagedResource, d
 			return err
 		}
 	}
-	if p.cfg.PangolinCreateSites && p.cfg.PangolinDefaultSiteID == 0 && managed.SiteID > 0 {
+	if p.cfg.PangolinCreateSites && managed.SiteManaged && managed.SiteID > 0 {
 		if dryRun {
 			p.log.Info("dry run: would delete Pangolin site", "siteId", managed.SiteID)
 		} else if err := p.client.delete(ctx, "/site/"+strconv.Itoa(managed.SiteID)+"?deleteResources=true"); err != nil {
@@ -139,6 +157,48 @@ func (p *Pangolin) createPublicResource(ctx context.Context, desired DesiredReso
 	return out.Data, nil
 }
 
+func (p *Pangolin) adoptExistingResource(ctx context.Context, desired DesiredResource) (ManagedResource, bool, error) {
+	page := 1
+	for {
+		resources, err := p.listPublicResourcesPage(ctx, page, 100)
+		if err != nil {
+			return ManagedResource{}, false, err
+		}
+		if len(resources) == 0 {
+			return ManagedResource{}, false, nil
+		}
+		for _, resource := range resources {
+			if p.cfg.PangolinDomainID != "" && resource.DomainID != "" && resource.DomainID != p.cfg.PangolinDomainID {
+				continue
+			}
+			targets, err := p.listTargets(ctx, resource.ResourceID)
+			if err != nil {
+				return ManagedResource{}, false, err
+			}
+			if !sameTargetSet(desired.Targets, targets) {
+				continue
+			}
+			managed := ManagedResource{ResourceID: resource.ResourceID}
+			for _, target := range targets {
+				if !target.Enabled {
+					continue
+				}
+				if managed.SiteID == 0 && target.SiteID > 0 {
+					managed.SiteID = target.SiteID
+				}
+				managed.TargetIDs = append(managed.TargetIDs, target.TargetID)
+			}
+			if managed.SiteID == 0 {
+				managed.SiteID = p.cfg.PangolinDefaultSiteID
+			}
+			p.log.Info("adopted existing Pangolin public resource",
+				"resourceId", managed.ResourceID, "name", resource.Name, "targets", len(managed.TargetIDs))
+			return managed, true, nil
+		}
+		page++
+	}
+}
+
 func (p *Pangolin) createTarget(ctx context.Context, resourceID, siteID int, target DesiredTarget, priority int) (PangolinTarget, error) {
 	var out APIResponse[PangolinTarget]
 	body := map[string]any{
@@ -167,9 +227,31 @@ func (p *Pangolin) deleteTarget(ctx context.Context, targetID int) error {
 	return p.client.delete(ctx, "/target/"+strconv.Itoa(targetID))
 }
 
+func (p *Pangolin) listTargets(ctx context.Context, resourceID int) ([]PangolinTarget, error) {
+	var out APIResponse[struct {
+		Targets []PangolinTarget `json:"targets"`
+	}]
+	path := "/public-resource/" + strconv.Itoa(resourceID) + "/targets?limit=1000&offset=0"
+	if err := p.client.get(ctx, path, &out); err != nil {
+		return nil, err
+	}
+	return out.Data.Targets, nil
+}
+
 func (p *Pangolin) applyPolicy(ctx context.Context, resourceID int) error {
 	body := map[string]any{"resourcePolicyId": p.cfg.PangolinResourcePolicyID}
 	return p.client.post(ctx, "/public-resource/"+strconv.Itoa(resourceID), body, nil)
+}
+
+func (p *Pangolin) listPublicResourcesPage(ctx context.Context, page, pageSize int) ([]PangolinResource, error) {
+	var out APIResponse[struct {
+		Resources []PangolinResource `json:"resources"`
+	}]
+	path := "/org/" + escape(p.cfg.PangolinOrgID) + "/public-resources?pageSize=" + strconv.Itoa(pageSize) + "&page=" + strconv.Itoa(page)
+	if err := p.client.get(ctx, path, &out); err != nil {
+		return nil, err
+	}
+	return out.Data.Resources, nil
 }
 
 func (p *Pangolin) ApplyPolicyToAllResources(ctx context.Context, dryRun bool, skip func(PangolinResource) bool) error {
@@ -178,20 +260,14 @@ func (p *Pangolin) ApplyPolicyToAllResources(ctx context.Context, dryRun bool, s
 	}
 	page := 1
 	for {
-		var out APIResponse[struct {
-			Resources  []PangolinResource `json:"resources"`
-			Pagination struct {
-				Total int `json:"total"`
-			} `json:"pagination"`
-		}]
-		path := "/org/" + escape(p.cfg.PangolinOrgID) + "/public-resources?pageSize=100&page=" + strconv.Itoa(page)
-		if err := p.client.get(ctx, path, &out); err != nil {
+		resources, err := p.listPublicResourcesPage(ctx, page, 100)
+		if err != nil {
 			return err
 		}
-		if len(out.Data.Resources) == 0 {
+		if len(resources) == 0 {
 			return nil
 		}
-		for _, resource := range out.Data.Resources {
+		for _, resource := range resources {
 			if skip != nil && skip(resource) {
 				p.log.Info("skipping shared policy for ignored Pangolin resource", "resourceId", resource.ResourceID, "name", resource.Name, "subdomain", resource.Subdomain)
 				continue
@@ -212,4 +288,31 @@ func (p *Pangolin) ApplyPolicyToAllResources(ctx context.Context, dryRun bool, s
 		}
 		page++
 	}
+}
+
+func sameTargetSet(desired []DesiredTarget, existing []PangolinTarget) bool {
+	expected := map[string]int{}
+	for _, target := range desired {
+		expected[targetKey(target.IP, target.Port)]++
+	}
+	actual := map[string]int{}
+	for _, target := range existing {
+		if !target.Enabled {
+			continue
+		}
+		actual[targetKey(target.IP, target.Port)]++
+	}
+	if len(expected) != len(actual) {
+		return false
+	}
+	for key, count := range expected {
+		if actual[key] != count {
+			return false
+		}
+	}
+	return true
+}
+
+func targetKey(ip string, port int) string {
+	return strings.ToLower(strings.TrimSpace(ip)) + ":" + strconv.Itoa(port)
 }
